@@ -1,0 +1,53 @@
+/**
+ * Represents a 3D vector with x, y, and z components.
+ * Can be provided as an array or array-like structure.
+ */
+export type Vec3 = [number, number, number] | number[];
+
+/**
+ * Axis-Aligned Bounding Box (AABB) interface.
+ * Represents a box in 3D space aligned with the coordinate axes.
+ */
+export interface IAABB {
+  /**
+   * The minimum corner of the bounding box (lower bounds on each axis).
+   */
+  base: Vec3;
+
+  /**
+   * The maximum corner of the bounding box (upper bounds on each axis).
+   */
+  max: Vec3;
+
+  /**
+   * Translates the AABB by the given vector.
+   * @param vec - The vector by which to translate the AABB
+   */
+  translate(vec: Vec3): void;
+}
+
+/**
+ * Function type for querying whether a voxel at given coordinates is solid.
+ *
+ * @param x - The x-coordinate of the voxel
+ * @param y - The y-coordinate of the voxel
+ * @param z - The z-coordinate of the voxel
+ * @returns True if the voxel is solid and should collide with the AABB, false otherwise
+ */
+export type GetVoxelFunction = (x: number, y: number, z: number) => boolean | any;
+
+/**
+ * Collision callback function that gets invoked when the AABB collides with a voxel.
+ *
+ * @param dist - The cumulative scalar distance moved so far during the sweep
+ * @param axis - The axis along which the collision occurred (0=x, 1=y, 2=z)
+ * @param dir - The direction of movement along the collision axis (1 or -1)
+ * @param vec - The remaining vector distance left to move (can be modified by the callback)
+ * @returns True to stop the sweep at this collision, false to continue sweeping
+ */
+export type CollisionCallback = (
+  dist: number,
+  axis: number,
+  dir: number,
+  vec: Vec3
+) => boolean | void;
