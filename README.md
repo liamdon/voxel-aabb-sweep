@@ -28,7 +28,9 @@ var distance = sweep(getVoxels, box, vector, callback, noTranslate, epsilon)
 ```
 
  * `distance` - the total scalar distance the AABB moved during the sweep
- * `getVoxel` - a `function(x,y,z)` that returns a truthy value for voxels that collide the AABB
+ * `getVoxel` - a `function(x,y,z,dx?,dy?,dz?)` that returns a truthy value for voxels that collide the AABB
+   * `x, y, z` - integer voxel coordinates
+   * `dx, dy, dz` - optional normalized position (0-1) within the voxel where the AABB's leading edge intersects
  * `box` - an object shaped like an [aabb-3d](https://github.com/fenomas/aabb-3d)
  * `vector` - vector along which the AABB is to move. E.g. `[5, 10, -3]`
  * `callback` - A function that will get called when a collision occurs.
@@ -75,7 +77,34 @@ var dist = sweep( getVoxel, box, vector, function(dist, axis, dir, vec) {
 })
 ```
 
-You could also do something more complicated, like bouncing back along the obstructed axis, etc. 
+You could also do something more complicated, like bouncing back along the obstructed axis, etc.
+
+### Fractional Voxel Collision
+
+The `getVoxel` function now receives optional `dx`, `dy`, `dz` parameters (values between 0 and 1)
+that represent where the AABB's leading edge intersects within each voxel. This enables
+sub-voxel collision detection for features like:
+
+- **Slab voxels** with fractional height (e.g., half-height blocks, stairs)
+- **Variable terrain** height within voxels
+- **Sloped surfaces** or other non-cubic geometry
+
+Example - half-height slab voxel:
+
+```js
+// A slab at voxel (0,5,0) that's only solid in the bottom half
+var getVoxel = function(x, y, z, dx, dy, dz) {
+    if (x === 0 && y === 5 && z === 0) {
+        // Only solid when dy < 0.5 (bottom half of voxel)
+        return (dy || 0) < 0.5
+    }
+    return false
+}
+```
+
+The dx, dy, dz parameters are always between 0 and 1, representing the fractional position
+within the voxel. For backward compatibility, these parameters are optional and existing
+code that doesn't use them will continue to work.
 
 ### Hacking
 

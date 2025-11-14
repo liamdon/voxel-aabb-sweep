@@ -32,9 +32,19 @@ export interface IAABB {
  * @param x - The x-coordinate of the voxel
  * @param y - The y-coordinate of the voxel
  * @param z - The z-coordinate of the voxel
+ * @param dx - Optional normalized position (0-1) within the voxel in the x-axis, representing where the AABB's leading edge intersects
+ * @param dy - Optional normalized position (0-1) within the voxel in the y-axis, representing where the AABB's leading edge intersects
+ * @param dz - Optional normalized position (0-1) within the voxel in the z-axis, representing where the AABB's leading edge intersects
  * @returns True if the voxel is solid and should collide with the AABB, false otherwise
  */
-export type GetVoxelFunction = (x: number, y: number, z: number) => boolean | any;
+export type GetVoxelFunction = (
+  x: number,
+  y: number,
+  z: number,
+  dx?: number,
+  dy?: number,
+  dz?: number
+) => boolean | any;
 
 /**
  * Collision callback function that gets invoked when the AABB collides with a voxel.

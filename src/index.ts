@@ -130,7 +130,26 @@ function sweep_impl(
     for (let x = x0; x !== x1; x += stepx) {
       for (let y = y0; y !== y1; y += stepy) {
         for (let z = z0; z !== z1; z += stepz) {
-          if (getVoxel(x, y, z)) return true;
+          // Calculate normalized position within each voxel (0-1)
+          // This represents where the AABB's leading edge intersects the voxel
+          const leadX = step[0] > 0 ? max[0] : base[0];
+          const leadY = step[1] > 0 ? max[1] : base[1];
+          const leadZ = step[2] > 0 ? max[2] : base[2];
+
+          // Get fractional position within voxel (0-1 range)
+          // Use modulo to handle the fractional part, accounting for negative values
+          let dx = leadX - x;
+          let dy = leadY - y;
+          let dz = leadZ - z;
+
+          // Normalize to 0-1 range
+          // For positive movement, dx/dy/dz is already 0-1
+          // For negative movement, we need to handle it properly
+          dx = dx - Math.floor(dx);
+          dy = dy - Math.floor(dy);
+          dz = dz - Math.floor(dz);
+
+          if (getVoxel(x, y, z, dx, dy, dz)) return true;
         }
       }
     }
