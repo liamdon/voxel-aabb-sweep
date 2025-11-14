@@ -3,7 +3,9 @@ node_modules/*
 
 # Build outputs
 dist/
-dist-test/
+
+# Test outputs
+.vitest/
 
 # Coverage
 .nyc_output/
