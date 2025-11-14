@@ -43,6 +43,7 @@ const result_arr: Vec3 = [0, 0, 0];
  * @param base - The minimum corner of the AABB (modified in place)
  * @param max - The maximum corner of the AABB (modified in place)
  * @param epsilon - Small value to handle floating-point precision at voxel boundaries
+ * @param checkStartingVoxel - If true, check if the AABB starts inside a solid voxel
  * @returns The total scalar distance traveled during the sweep
  */
 function sweep_impl(
@@ -51,7 +52,8 @@ function sweep_impl(
   vec: Vec3,
   base: Vec3,
   max: Vec3,
-  epsilon: number
+  epsilon: number,
+  checkStartingVoxel?: boolean
 ): number {
   // Reuse pre-allocated arrays for intermediate calculations
   const tr = tr_arr;
@@ -271,6 +273,41 @@ function sweep_impl(
   initSweep();
   if (max_t === 0) return 0;
 
+  // Check if AABB's leading face starts inside a solid voxel
+  if (checkStartingVoxel) {
+    // Check the leading face for each axis to detect starting collisions
+    // We check all three axes because we don't know which direction(s) might be solid
+    for (let checkAxis = 0; checkAxis < 3; checkAxis++) {
+      if (checkCollision(checkAxis)) {
+        // Found a solid voxel at the starting position
+        // Invoke the callback with dist=0 to indicate we started in a collision
+        const left = left_arr;
+        for (i = 0; i < 3; i++) left[i] = vec[i];
+        const res = callback(0, checkAxis, step[checkAxis], left);
+
+        // If callback returns truthy, stop immediately
+        if (res) return 0;
+
+        // If callback modified the vector, re-initialize the sweep
+        let vecModified = false;
+        for (i = 0; i < 3; i++) {
+          if (left[i] !== vec[i]) {
+            vec[i] = left[i];
+            vecModified = true;
+          }
+        }
+
+        if (vecModified) {
+          initSweep();
+          if (max_t === 0) return 0;
+        }
+
+        // Only check one axis - if we found a collision, we've handled it
+        break;
+      }
+    }
+  }
+
   axis = stepForward();
 
   // Main loop: advance along the raycast vector
@@ -333,12 +370,32 @@ function sweep_impl(
  * });
  * ```
  *
+ * @example
+ * ```typescript
+ * // Detect collisions when starting inside a solid voxel
+ * const distance = sweep(
+ *   getVoxel,
+ *   box,
+ *   direction,
+ *   (dist, axis, dir, vec) => {
+ *     if (dist === 0) {
+ *       console.log('Started inside a solid voxel!');
+ *     }
+ *     return true;
+ *   },
+ *   false,
+ *   1e-10,
+ *   true // checkStartingVoxel enabled
+ * );
+ * ```
+ *
  * @param getVoxel - Function that returns truthy for solid voxels at (x,y,z)
  * @param box - The AABB to sweep, with base/max corners and a translate method
  * @param dir - The direction vector along which to move the AABB
  * @param callback - Function called when a collision occurs
  * @param noTranslate - If true, don't automatically translate the box to its final position
  * @param epsilon - Precision factor for voxel boundary crossing (default: 1e-10)
+ * @param checkStartingVoxel - If true, check if the AABB's leading face starts inside a solid voxel (default: false)
  * @returns The total scalar distance the AABB traveled during the sweep
  */
 export function sweep(
@@ -347,7 +404,8 @@ export function sweep(
   dir: Vec3,
   callback: CollisionCallback,
   noTranslate?: boolean,
-  epsilon?: number
+  epsilon?: number,
+  checkStartingVoxel?: boolean
 ): number {
   const vec = vec_arr;
   const base = base_arr;
@@ -364,7 +422,7 @@ export function sweep(
   if (!epsilon) epsilon = 1e-10;
 
   // Run the core sweep implementation
-  const dist = sweep_impl(getVoxel, callback, vec, base, max, epsilon);
+  const dist = sweep_impl(getVoxel, callback, vec, base, max, epsilon, checkStartingVoxel);
 
   // Translate the box to its final position (unless disabled)
   if (!noTranslate) {
