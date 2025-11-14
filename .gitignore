@@ -1,2 +1,13 @@
 npm-debug.log
 node_modules/*
+
+# Build outputs
+dist/
+dist-test/
+
+# Coverage
+.nyc_output/
+coverage/
+
+# TypeScript
+*.tsbuildinfo
