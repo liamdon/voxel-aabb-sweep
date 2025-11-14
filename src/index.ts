@@ -2,20 +2,219 @@ import type { Vec3, IAABB, GetVoxelFunction, CollisionCallback } from './types';
 
 /**
  * Internal state arrays reused across sweep operations to minimize garbage collection.
+ * Using Float64Array for monomorphic hidden classes and predictable V8 optimization.
  * These arrays store intermediate calculations during the sweep algorithm.
  */
-const tr_arr: Vec3 = [0, 0, 0];
-const ldi_arr: Vec3 = [0, 0, 0];
-const tri_arr: Vec3 = [0, 0, 0];
-const step_arr: Vec3 = [0, 0, 0];
-const tDelta_arr: Vec3 = [0, 0, 0];
-const tNext_arr: Vec3 = [0, 0, 0];
-const vec_arr: Vec3 = [0, 0, 0];
-const normed_arr: Vec3 = [0, 0, 0];
-const base_arr: Vec3 = [0, 0, 0];
-const max_arr: Vec3 = [0, 0, 0];
-const left_arr: Vec3 = [0, 0, 0];
-const result_arr: Vec3 = [0, 0, 0];
+const tr_arr = new Float64Array(3);
+const ldi_arr = new Float64Array(3);
+const tri_arr = new Float64Array(3);
+const step_arr = new Float64Array(3);
+const tDelta_arr = new Float64Array(3);
+const tNext_arr = new Float64Array(3);
+const vec_arr = new Float64Array(3);
+const normed_arr = new Float64Array(3);
+const base_arr = new Float64Array(3);
+const max_arr = new Float64Array(3);
+const left_arr = new Float64Array(3);
+const result_arr = new Float64Array(3);
+
+/**
+ * Sweep context containing all state for the current sweep operation.
+ * Extracted to module level to enable V8 function inlining.
+ */
+interface SweepContext {
+  getVoxel: GetVoxelFunction;
+  callback: CollisionCallback;
+  vec: Float64Array;
+  base: Float64Array;
+  max: Float64Array;
+  epsilon: number;
+  tr: Float64Array;
+  ldi: Float64Array;
+  tri: Float64Array;
+  step: Float64Array;
+  tDelta: Float64Array;
+  tNext: Float64Array;
+  normed: Float64Array;
+  cumulative_t: number;
+  t: number;
+  max_t: number;
+  axis: number;
+}
+
+/**
+ * Convert a leading edge coordinate to its voxel integer coordinate.
+ * Extracted to module level for V8 inlining optimization.
+ */
+function leadEdgeToInt(coord: number, step: number, epsilon: number): number {
+  return Math.floor(coord - step * epsilon);
+}
+
+/**
+ * Convert a trailing edge coordinate to its voxel integer coordinate.
+ * Extracted to module level for V8 inlining optimization.
+ */
+function trailEdgeToInt(coord: number, step: number, epsilon: number): number {
+  return Math.floor(coord + step * epsilon);
+}
+
+/**
+ * Initialize the sweep parameters for the current movement vector.
+ * Calculates step directions, voxel boundaries, and parametric distances.
+ * Extracted to module level for V8 inlining optimization.
+ */
+function initSweep(ctx: SweepContext): void {
+  const { vec, max, base, step, tr, ldi, tri, normed, tDelta, tNext, epsilon } = ctx;
+
+  // Parametrization t along raycast (0 to max_t represents full movement)
+  ctx.t = 0.0;
+  ctx.max_t = Math.sqrt(vec[0] * vec[0] + vec[1] * vec[1] + vec[2] * vec[2]);
+  if (ctx.max_t === 0) return;
+
+  for (let i = 0; i < 3; i++) {
+    const dir = vec[i] >= 0;
+    step[i] = dir ? 1 : -1;
+
+    // Leading and trailing edge coordinates
+    const lead = dir ? max[i] : base[i];
+    tr[i] = dir ? base[i] : max[i];
+
+    // Integer voxel coordinates of lead/trail edges
+    ldi[i] = leadEdgeToInt(lead, step[i], epsilon);
+    tri[i] = trailEdgeToInt(tr[i], step[i], epsilon);
+
+    // Normalized direction vector
+    normed[i] = vec[i] / ctx.max_t;
+
+    // Distance along t required to move one voxel in this axis
+    tDelta[i] = Math.abs(1 / normed[i]);
+
+    // Distance to the nearest voxel boundary in units of t
+    const dist = dir ? ldi[i] + 1 - lead : lead - ldi[i];
+    tNext[i] = tDelta[i] < Infinity ? tDelta[i] * dist : Infinity;
+  }
+}
+
+/**
+ * Check for collisions across the AABB's leading face in the given axis.
+ * Extracted to module level for V8 inlining optimization.
+ */
+function checkCollision(ctx: SweepContext, i_axis: number): boolean {
+  const { getVoxel, step, ldi, tri, base, max } = ctx;
+
+  const stepx = step[0];
+  const x0 = i_axis === 0 ? ldi[0] : tri[0];
+  const x1 = ldi[0] + stepx;
+
+  const stepy = step[1];
+  const y0 = i_axis === 1 ? ldi[1] : tri[1];
+  const y1 = ldi[1] + stepy;
+
+  const stepz = step[2];
+  const z0 = i_axis === 2 ? ldi[2] : tri[2];
+  const z1 = ldi[2] + stepz;
+
+  // Hoist leading edge calculations outside loops (V8 optimization)
+  const leadX = step[0] > 0 ? max[0] : base[0];
+  const leadY = step[1] > 0 ? max[1] : base[1];
+  const leadZ = step[2] > 0 ? max[2] : base[2];
+
+  // Iterate over all voxels on the leading face
+  for (let x = x0; x !== x1; x += stepx) {
+    // Pre-calculate dx once per x iteration
+    let dx = leadX - x;
+    dx = dx - Math.floor(dx);
+
+    for (let y = y0; y !== y1; y += stepy) {
+      // Pre-calculate dy once per y iteration
+      let dy = leadY - y;
+      dy = dy - Math.floor(dy);
+
+      for (let z = z0; z !== z1; z += stepz) {
+        // Calculate dz once per z iteration
+        let dz = leadZ - z;
+        dz = dz - Math.floor(dz);
+
+        if (getVoxel(x, y, z, dx, dy, dz)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Handle a collision by invoking the callback and updating sweep state.
+ * Extracted to module level for V8 inlining optimization.
+ */
+function handleCollision(ctx: SweepContext): boolean {
+  const { callback, vec, base, max, step, axis, t, max_t } = ctx;
+
+  // Update cumulative distance and get collision direction
+  ctx.cumulative_t += t;
+  const dir = step[axis];
+
+  // Calculate how much of the movement vector has been completed
+  const done = t / max_t;
+  const left = left_arr;
+
+  for (let i = 0; i < 3; i++) {
+    const dv = vec[i] * done;
+    base[i] += dv;
+    max[i] += dv;
+    left[i] = vec[i] - dv;
+  }
+
+  // Snap the leading edge exactly to the voxel boundary
+  if (dir > 0) {
+    max[axis] = Math.round(max[axis]);
+  } else {
+    base[axis] = Math.round(base[axis]);
+  }
+
+  // Invoke the callback to let the user handle the collision
+  const res = callback(ctx.cumulative_t, axis, dir, left as any);
+
+  // If callback returns truthy, stop the sweep
+  if (res) return true;
+
+  // Re-initialize for a new sweep with the remaining vector
+  for (let i = 0; i < 3; i++) vec[i] = left[i];
+  initSweep(ctx);
+  if (ctx.max_t === 0) return true; // No vector left to sweep
+
+  return false;
+}
+
+/**
+ * Advance the raycast to the next voxel boundary.
+ * Extracted to module level for V8 inlining optimization.
+ */
+function stepForward(ctx: SweepContext): number {
+  const { tNext, step, ldi, tDelta, tr, tri, normed } = ctx;
+
+  // Find the axis with the nearest voxel boundary
+  const axis =
+    tNext[0] < tNext[1]
+      ? tNext[0] < tNext[2]
+        ? 0
+        : 2
+      : tNext[1] < tNext[2]
+        ? 1
+        : 2;
+
+  const dt = tNext[axis] - ctx.t;
+  ctx.t = tNext[axis];
+  ldi[axis] += step[axis];
+  tNext[axis] += tDelta[axis];
+
+  // Update trailing edge positions for all axes
+  for (let i = 0; i < 3; i++) {
+    tr[i] += dt * normed[i];
+    tri[i] = trailEdgeToInt(tr[i], step[i], ctx.epsilon);
+  }
+
+  return axis;
+}
 
 /**
  * Core sweep implementation using a raycast-based algorithm.
@@ -49,248 +248,52 @@ const result_arr: Vec3 = [0, 0, 0];
 function sweep_impl(
   getVoxel: GetVoxelFunction,
   callback: CollisionCallback,
-  vec: Vec3,
-  base: Vec3,
-  max: Vec3,
+  vec: Float64Array,
+  base: Float64Array,
+  max: Float64Array,
   epsilon: number,
-  checkStartingVoxel?: boolean
+  checkStartingVoxel: boolean
 ): number {
-  // Reuse pre-allocated arrays for intermediate calculations
-  const tr = tr_arr;
-  const ldi = ldi_arr;
-  const tri = tri_arr;
-  const step = step_arr;
-  const tDelta = tDelta_arr;
-  const tNext = tNext_arr;
-  const normed = normed_arr;
+  // Create sweep context for module-level functions (enables V8 inlining)
+  const ctx: SweepContext = {
+    getVoxel,
+    callback,
+    vec,
+    base,
+    max,
+    epsilon,
+    tr: tr_arr,
+    ldi: ldi_arr,
+    tri: tri_arr,
+    step: step_arr,
+    tDelta: tDelta_arr,
+    tNext: tNext_arr,
+    normed: normed_arr,
+    cumulative_t: 0.0,
+    t: 0.0,
+    max_t: 0.0,
+    axis: 0,
+  };
 
-  const floor = Math.floor;
-  let cumulative_t = 0.0;
-  let t = 0.0;
-  let max_t = 0.0;
-  let axis = 0;
-  let i = 0;
-
-  /**
-   * Initialize the sweep parameters for the current movement vector.
-   * Calculates step directions, voxel boundaries, and parametric distances.
-   */
-  function initSweep(): void {
-    // Parametrization t along raycast (0 to max_t represents full movement)
-    t = 0.0;
-    max_t = Math.sqrt(vec[0] * vec[0] + vec[1] * vec[1] + vec[2] * vec[2]);
-    if (max_t === 0) return;
-
-    for (let i = 0; i < 3; i++) {
-      const dir = vec[i] >= 0;
-      step[i] = dir ? 1 : -1;
-
-      // Leading and trailing edge coordinates
-      const lead = dir ? max[i] : base[i];
-      tr[i] = dir ? base[i] : max[i];
-
-      // Integer voxel coordinates of lead/trail edges
-      ldi[i] = leadEdgeToInt(lead, step[i]);
-      tri[i] = trailEdgeToInt(tr[i], step[i]);
-
-      // Normalized direction vector
-      normed[i] = vec[i] / max_t;
-
-      // Distance along t required to move one voxel in this axis
-      tDelta[i] = Math.abs(1 / normed[i]);
-
-      // Distance to the nearest voxel boundary in units of t
-      const dist = dir ? ldi[i] + 1 - lead : lead - ldi[i];
-      tNext[i] = tDelta[i] < Infinity ? tDelta[i] * dist : Infinity;
-    }
-  }
-
-  /**
-   * Check for collisions across the AABB's leading face in the given axis.
-   *
-   * When the raycast crosses a voxel boundary in a particular axis, this function
-   * checks all voxels that intersect with the AABB's leading face perpendicular
-   * to that axis.
-   *
-   * @param i_axis - The axis (0=x, 1=y, 2=z) along which we just stepped
-   * @returns True if any solid voxel was found on the leading face
-   */
-  function checkCollision(i_axis: number): boolean {
-    const stepx = step[0];
-    const x0 = i_axis === 0 ? ldi[0] : tri[0];
-    const x1 = ldi[0] + stepx;
-
-    const stepy = step[1];
-    const y0 = i_axis === 1 ? ldi[1] : tri[1];
-    const y1 = ldi[1] + stepy;
-
-    const stepz = step[2];
-    const z0 = i_axis === 2 ? ldi[2] : tri[2];
-    const z1 = ldi[2] + stepz;
-
-    // Iterate over all voxels on the leading face
-    for (let x = x0; x !== x1; x += stepx) {
-      for (let y = y0; y !== y1; y += stepy) {
-        for (let z = z0; z !== z1; z += stepz) {
-          // Calculate normalized position within each voxel (0-1)
-          // This represents where the AABB's leading edge intersects the voxel
-          const leadX = step[0] > 0 ? max[0] : base[0];
-          const leadY = step[1] > 0 ? max[1] : base[1];
-          const leadZ = step[2] > 0 ? max[2] : base[2];
-
-          // Get fractional position within voxel (0-1 range)
-          // Use modulo to handle the fractional part, accounting for negative values
-          let dx = leadX - x;
-          let dy = leadY - y;
-          let dz = leadZ - z;
-
-          // Normalize to 0-1 range
-          // For positive movement, dx/dy/dz is already 0-1
-          // For negative movement, we need to handle it properly
-          dx = dx - Math.floor(dx);
-          dy = dy - Math.floor(dy);
-          dz = dz - Math.floor(dz);
-
-          if (getVoxel(x, y, z, dx, dy, dz)) return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Handle a collision by invoking the callback and updating sweep state.
-   *
-   * When a collision is detected, this function:
-   * 1. Updates the AABB position to the collision point
-   * 2. Snaps the colliding edge exactly to the voxel boundary
-   * 3. Invokes the user callback with collision information
-   * 4. Re-initializes the sweep with any remaining movement vector
-   *
-   * @returns True if the sweep should stop, false to continue
-   */
-  function handleCollision(): boolean {
-    // Update cumulative distance and get collision direction
-    cumulative_t += t;
-    const dir = step[axis];
-
-    // Calculate how much of the movement vector has been completed
-    const done = t / max_t;
-    const left = left_arr;
-    for (i = 0; i < 3; i++) {
-      const dv = vec[i] * done;
-      base[i] += dv;
-      max[i] += dv;
-      left[i] = vec[i] - dv;
-    }
-
-    // Snap the leading edge exactly to the voxel boundary
-    // This prevents floating-point rounding errors from causing the AABB
-    // to slightly penetrate the colliding voxel
-    if (dir > 0) {
-      max[axis] = Math.round(max[axis]);
-    } else {
-      base[axis] = Math.round(base[axis]);
-    }
-
-    // Invoke the callback to let the user handle the collision
-    const res = callback(cumulative_t, axis, dir, left);
-
-    // If callback returns truthy, stop the sweep
-    if (res) return true;
-
-    // Re-initialize for a new sweep with the remaining vector
-    for (i = 0; i < 3; i++) vec[i] = left[i];
-    initSweep();
-    if (max_t === 0) return true; // No vector left to sweep
-
-    return false;
-  }
-
-  /**
-   * Advance the raycast to the next voxel boundary.
-   *
-   * Determines which axis will be crossed next (the one with minimum tNext),
-   * advances the parametric position t to that boundary, and updates all
-   * relevant sweep state.
-   *
-   * @returns The axis (0=x, 1=y, 2=z) that was stepped along
-   */
-  function stepForward(): number {
-    // Find the axis with the nearest voxel boundary
-    const axis =
-      tNext[0] < tNext[1]
-        ? tNext[0] < tNext[2]
-          ? 0
-          : 2
-        : tNext[1] < tNext[2]
-          ? 1
-          : 2;
-
-    const dt = tNext[axis] - t;
-    t = tNext[axis];
-    ldi[axis] += step[axis];
-    tNext[axis] += tDelta[axis];
-
-    // Update trailing edge positions for all axes
-    for (i = 0; i < 3; i++) {
-      tr[i] += dt * normed[i];
-      tri[i] = trailEdgeToInt(tr[i], step[i]);
-    }
-
-    return axis;
-  }
-
-  /**
-   * Convert a leading edge coordinate to its voxel integer coordinate.
-   *
-   * The leading edge is the front face of the AABB in the direction of movement.
-   * The epsilon value prevents floating-point errors at voxel boundaries.
-   *
-   * @param coord - The floating-point coordinate of the edge
-   * @param step - The step direction (1 or -1)
-   * @returns The integer voxel coordinate
-   */
-  function leadEdgeToInt(coord: number, step: number): number {
-    return floor(coord - step * epsilon);
-  }
-
-  /**
-   * Convert a trailing edge coordinate to its voxel integer coordinate.
-   *
-   * The trailing edge is the back face of the AABB opposite to the direction
-   * of movement. The epsilon value prevents floating-point errors at boundaries.
-   *
-   * @param coord - The floating-point coordinate of the edge
-   * @param step - The step direction (1 or -1)
-   * @returns The integer voxel coordinate
-   */
-  function trailEdgeToInt(coord: number, step: number): number {
-    return floor(coord + step * epsilon);
-  }
-
-  // Initialize sweep parameters and take the first step
-  initSweep();
-  if (max_t === 0) return 0;
+  // Initialize sweep parameters
+  initSweep(ctx);
+  if (ctx.max_t === 0) return 0;
 
   // Check if AABB's leading face starts inside a solid voxel
   if (checkStartingVoxel) {
-    // Check the leading face for each axis to detect starting collisions
-    // We check all three axes because we don't know which direction(s) might be solid
     for (let checkAxis = 0; checkAxis < 3; checkAxis++) {
-      if (checkCollision(checkAxis)) {
+      if (checkCollision(ctx, checkAxis)) {
         // Found a solid voxel at the starting position
-        // Invoke the callback with dist=0 to indicate we started in a collision
         const left = left_arr;
-        for (i = 0; i < 3; i++) left[i] = vec[i];
-        const res = callback(0, checkAxis, step[checkAxis], left);
+        for (let i = 0; i < 3; i++) left[i] = vec[i];
+        const res = callback(0, checkAxis, ctx.step[checkAxis], left as any);
 
         // If callback returns truthy, stop immediately
         if (res) return 0;
 
         // If callback modified the vector, re-initialize the sweep
         let vecModified = false;
-        for (i = 0; i < 3; i++) {
+        for (let i = 0; i < 3; i++) {
           if (left[i] !== vec[i]) {
             vec[i] = left[i];
             vecModified = true;
@@ -298,8 +301,8 @@ function sweep_impl(
         }
 
         if (vecModified) {
-          initSweep();
-          if (max_t === 0) return 0;
+          initSweep(ctx);
+          if (ctx.max_t === 0) return 0;
         }
 
         // Only check one axis - if we found a collision, we've handled it
@@ -308,27 +311,27 @@ function sweep_impl(
     }
   }
 
-  axis = stepForward();
+  ctx.axis = stepForward(ctx);
 
   // Main loop: advance along the raycast vector
-  while (t <= max_t) {
+  while (ctx.t <= ctx.max_t) {
     // Check for collisions on the leading face of the AABB
-    if (checkCollision(axis)) {
+    if (checkCollision(ctx, ctx.axis)) {
       // Handle the collision and decide whether to continue
-      const done = handleCollision();
-      if (done) return cumulative_t;
+      const done = handleCollision(ctx);
+      if (done) return ctx.cumulative_t;
     }
 
-    axis = stepForward();
+    ctx.axis = stepForward(ctx);
   }
 
   // Reached the end of the vector without obstruction
-  cumulative_t += max_t;
-  for (i = 0; i < 3; i++) {
+  ctx.cumulative_t += ctx.max_t;
+  for (let i = 0; i < 3; i++) {
     base[i] += vec[i];
     max[i] += vec[i];
   }
-  return cumulative_t;
+  return ctx.cumulative_t;
 }
 
 /**
@@ -403,33 +406,35 @@ export function sweep(
   box: IAABB,
   dir: Vec3,
   callback: CollisionCallback,
-  noTranslate?: boolean,
-  epsilon?: number,
-  checkStartingVoxel?: boolean
+  noTranslate: boolean = false,
+  epsilon: number = 1e-10,
+  checkStartingVoxel: boolean = false
 ): number {
   const vec = vec_arr;
   const base = base_arr;
   const max = max_arr;
   const result = result_arr;
 
-  // Initialize parameter arrays with input values
-  for (let i = 0; i < 3; i++) {
-    vec[i] = +dir[i];
-    max[i] = +box.max[i];
-    base[i] = +box.base[i];
-  }
-
-  if (!epsilon) epsilon = 1e-10;
+  // Initialize parameter arrays with input values (direct assignment for V8 optimization)
+  vec[0] = +dir[0];
+  vec[1] = +dir[1];
+  vec[2] = +dir[2];
+  max[0] = +box.max[0];
+  max[1] = +box.max[1];
+  max[2] = +box.max[2];
+  base[0] = +box.base[0];
+  base[1] = +box.base[1];
+  base[2] = +box.base[2];
 
   // Run the core sweep implementation
   const dist = sweep_impl(getVoxel, callback, vec, base, max, epsilon, checkStartingVoxel);
 
   // Translate the box to its final position (unless disabled)
   if (!noTranslate) {
-    for (let i = 0; i < 3; i++) {
-      result[i] = dir[i] > 0 ? max[i] - box.max[i] : base[i] - box.base[i];
-    }
-    box.translate(result);
+    result[0] = dir[0] > 0 ? max[0] - box.max[0] : base[0] - box.base[0];
+    result[1] = dir[1] > 0 ? max[1] - box.max[1] : base[1] - box.base[1];
+    result[2] = dir[2] > 0 ? max[2] - box.max[2] : base[2] - box.base[2];
+    box.translate(result as any);
   }
 
   // Return total distance moved (not necessarily the magnitude of [end]-[start])
