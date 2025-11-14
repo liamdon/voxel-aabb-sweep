@@ -2,17 +2,30 @@
   "name": "voxel-aabb-sweep",
   "version": "0.5.0",
   "description": "Sweep an AABB through voxels or a tileset and find collisions",
-  "main": "index.js",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "directories": {
     "test": "test"
   },
   "scripts": {
-    "test": "tap test/*"
+    "build": "tsc",
+    "build:test": "tsc -p tsconfig.test.json",
+    "test": "npm run build:test && tap dist-test/test/*.js",
+    "prepublishOnly": "npm run build"
   },
+  "files": [
+    "dist",
+    "src",
+    "index.js",
+    "reference"
+  ],
   "author": "Andy Hall",
   "license": "MIT",
   "devDependencies": {
-    "tap": "^5.7.1"
+    "@types/node": "^20.0.0",
+    "@types/tap": "^15.0.11",
+    "tap": "^15.2.3",
+    "typescript": "^5.3.0"
   },
   "repository": {
     "type": "git",
@@ -22,7 +35,9 @@
     "voxel",
     "aabb",
     "sweep",
-    "collision"
+    "collision",
+    "typescript",
+    "3d"
   ],
   "bugs": {
     "url": "https://github.com/fenomas/voxel-aabb-sweep/issues"
