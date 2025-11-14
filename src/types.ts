@@ -54,6 +54,10 @@ export type GetVoxelFunction = (
  * @param dir - The direction of movement along the collision axis (1 or -1)
  * @param vec - The remaining vector distance left to move (can be modified by the callback)
  * @returns True to stop the sweep at this collision, false to continue sweeping
+ *
+ * @remarks
+ * When `checkStartingVoxel` is enabled, the callback may be invoked with `dist=0`
+ * if the AABB's leading face starts inside a solid voxel.
  */
 export type CollisionCallback = (
   dist: number,
