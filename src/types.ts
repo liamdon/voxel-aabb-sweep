@@ -1,8 +1,8 @@
 /**
  * Represents a 3D vector with x, y, and z components.
- * Can be provided as an array or array-like structure.
+ * Strict tuple type for V8 monomorphic optimization.
  */
-export type Vec3 = [number, number, number] | number[];
+export type Vec3 = [number, number, number];
 
 /**
  * Axis-Aligned Bounding Box (AABB) interface.
